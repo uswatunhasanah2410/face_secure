@@ -1,0 +1,74 @@
+.landing {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: linear-gradient(180deg, #fff 0%, #fff 34%, #b9ceff 48%, #6b95ff 68%, #1c3f9e 88%, #0a2472 100%);
+}
+
+.landing__nav {
+  position: absolute;
+  top: 1.6rem;
+  right: 2rem;
+  z-index: 3;
+  display: flex;
+  gap: .6rem;
+}
+
+.landing__hero {
+  position: relative;
+  z-index: 2;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 10vh 1.5rem 4rem;
+  text-align: center;
+}
+
+.landing__title { font-size: clamp(3rem, 8vw, 6.5rem); }
+
+.landing__tagline {
+  margin-top: 2.2rem;
+  font-size: clamp(1.2rem, 2.4vw, 1.9rem);
+  font-weight: 500;
+}
+
+.landing__desc {
+  margin-top: 2.6rem;
+  max-width: 900px;
+  font-size: clamp(1rem, 1.8vw, 1.4rem);
+  color: #000;
+}
+
+.landing__cta {
+  margin-top: 4rem;
+  display: inline-flex;
+  align-items: center;
+  gap: .8rem;
+  padding: 1.5rem 4.2rem;
+  font-size: 1.3rem;
+  font-weight: 500;
+  color: var(--navy-700);
+  background: var(--blue-100);
+  border-radius: 999px;
+  box-shadow: 0 14px 34px rgba(6, 26, 92, .25);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.landing__cta:hover { transform: translateY(-3px); box-shadow: 0 20px 40px rgba(6, 26, 92, .32); }
+.landing__cta .icon { color: var(--blue-500); }
+
+/* Dekorasi */
+.dots--tr { top: 4rem; right: 0; width: 120px; height: 300px; color: var(--blue-600);
+  -webkit-mask-image: linear-gradient(270deg, #000, transparent); mask-image: linear-gradient(270deg, #000, transparent); }
+.dots--bl { left: 0; bottom: 0; width: 55%; height: 70%; color: #fff;
+  -webkit-mask-image: radial-gradient(ellipse at bottom left, #000, transparent 70%); mask-image: radial-gradient(ellipse at bottom left, #000, transparent 70%); }
+.dots--wave { right: 0; bottom: 0; width: 360px; height: 190px; color: #fff; background-size: 9px 9px;
+  -webkit-mask-image: radial-gradient(ellipse at bottom right, #000, transparent 72%); mask-image: radial-gradient(ellipse at bottom right, #000, transparent 72%); }
+
+@media (max-width: 600px) {
+  .landing__cta { padding: 1.1rem 2.4rem; }
+  .landing__nav { right: 1rem; }
+}

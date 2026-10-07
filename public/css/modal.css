@@ -1,0 +1,85 @@
+/* Modal / alert dummy */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: rgba(6, 26, 92, .35);
+  backdrop-filter: blur(3px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+}
+.modal-overlay.is-open { opacity: 1; pointer-events: auto; }
+
+.modal {
+  position: relative;
+  width: min(100%, 520px);
+  padding: 1.6rem 2rem 1.8rem;
+  text-align: center;
+  background: #fff;
+  border-radius: 32px;
+  box-shadow: 0 30px 70px rgba(6, 26, 92, .3);
+  transform: translateY(14px) scale(.97);
+  transition: transform .22s ease;
+}
+.modal-overlay.is-open .modal { transform: none; }
+
+.modal__close {
+  position: absolute;
+  top: 1.1rem;
+  right: 1.3rem;
+  color: #555;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+.modal__close:hover { color: var(--ink); }
+
+.modal__title { font-size: 1.35rem; font-weight: 400; margin-bottom: 1rem; }
+
+.modal__icon {
+  width: 128px;
+  height: 128px;
+  margin: 0 auto 1.1rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 6px solid currentColor;
+}
+.modal__icon .icon { width: 58px; height: 58px; stroke-width: 3.2; }
+.modal--success .modal__icon { color: var(--ok); }
+.modal--error .modal__icon { color: var(--err); }
+.modal--info .modal__icon { color: var(--blue-500); }
+
+.modal__text { font-size: .95rem; line-height: 1.5; margin-bottom: 1rem; }
+
+.modal__btn {
+  padding: .5rem 1.8rem;
+  font-size: 1rem;
+  background: #fff;
+  border: 3px solid var(--line);
+  border-radius: 10px;
+  transition: background .15s ease, border-color .15s ease;
+}
+.modal__btn:hover { background: var(--blue-100); border-color: var(--blue-200); }
+
+/* Toast kecil */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 2rem;
+  z-index: 120;
+  transform: translate(-50%, 20px);
+  padding: .8rem 1.4rem;
+  color: #fff;
+  font-size: .92rem;
+  background: var(--navy-800);
+  border-radius: 999px;
+  box-shadow: 0 12px 30px rgba(6, 26, 92, .3);
+  opacity: 0;
+  transition: opacity .2s ease, transform .2s ease;
+}
+.toast.is-show { opacity: 1; transform: translate(-50%, 0); }

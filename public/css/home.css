@@ -1,0 +1,56 @@
+.home {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  background: linear-gradient(180deg, #fff 0%, #fff 32%, #b9ceff 46%, #6b95ff 66%, #1c3f9e 88%, #0a2472 100%);
+}
+
+.home__nav { position: absolute; top: 1.6rem; right: 2rem; z-index: 3; }
+
+.home__head { position: relative; z-index: 2; padding: 3.2rem 5.5rem 0; }
+.home__title { font-size: clamp(2.4rem, 5.6vw, 4.6rem); }
+.home__tagline { margin-top: 1.6rem; font-size: clamp(1.1rem, 2vw, 1.6rem); font-weight: 500; }
+.home__desc { margin-top: 1.2rem; max-width: 1100px; font-size: clamp(.95rem, 1.5vw, 1.2rem); line-height: 1.6; color: var(--ink); }
+
+.home__body {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 2rem;
+  padding: 1rem 4rem 3rem;
+}
+.home__art { width: min(48%, 560px); }
+
+.home__cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .8rem;
+  width: min(100%, 460px);
+  padding: 1.7rem 2rem;
+  font-size: 1.35rem;
+  font-weight: 500;
+  color: var(--navy-700);
+  background: var(--blue-100);
+  border-radius: 999px;
+  box-shadow: 0 14px 34px rgba(6, 26, 92, .25);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.home__cta:hover { transform: translateY(-3px); box-shadow: 0 20px 40px rgba(6, 26, 92, .32); }
+.home__cta .icon { color: var(--blue-500); }
+
+/* Dekorasi */
+.dots--tr { top: 4rem; right: 0; width: 120px; height: 300px; color: var(--blue-600);
+  -webkit-mask-image: linear-gradient(270deg, #000, transparent); mask-image: linear-gradient(270deg, #000, transparent); }
+.dots--bl { left: 0; bottom: 0; width: 45%; height: 65%; color: #fff;
+  -webkit-mask-image: radial-gradient(ellipse at bottom left, #000, transparent 70%); mask-image: radial-gradient(ellipse at bottom left, #000, transparent 70%); }
+.dots--wave { right: 0; bottom: 0; width: 360px; height: 190px; color: #fff; background-size: 9px 9px;
+  -webkit-mask-image: radial-gradient(ellipse at bottom right, #000, transparent 72%); mask-image: radial-gradient(ellipse at bottom right, #000, transparent 72%); }
+
+@media (max-width: 860px) {
+  .home__head { padding: 5rem 1.5rem 0; }
+  .home__body { flex-direction: column; padding: 1rem 1.5rem 3rem; }
+  .home__art { width: 85%; }
+}

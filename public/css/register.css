@@ -1,0 +1,42 @@
+/* Khusus halaman Registrasi */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  padding: .9rem 1.1rem;
+  margin-bottom: 1.5rem;
+  font-size: .9rem;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--ok-soft);
+  border: 2px solid #a8d8ad;
+  border-radius: 18px;
+}
+.notice .icon { width: 34px; height: 34px; color: #86c98f; }
+
+.otp-label { margin-bottom: .8rem; font-size: 1.05rem; }
+
+.otp { display: flex; gap: .6rem; justify-content: space-between; }
+.otp input {
+  width: 100%;
+  max-width: 64px;
+  aspect-ratio: 1;
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 500;
+  color: var(--navy-800);
+  border: 3px solid var(--line);
+  border-radius: 16px;
+  outline: 0;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.otp input:focus { border-color: var(--blue-400); box-shadow: 0 0 0 4px rgba(107, 149, 255, .18); }
+.otp.is-error input { border-color: var(--err); }
+
+.otp-error { display: block; min-height: 1.2rem; margin-top: .5rem; }
+.otp-error:empty { display: block; }
+.otp-note { margin: .6rem 0 1.8rem; }
+
+.muted { color: var(--muted); }
+.link--back { display: inline-flex; align-items: center; gap: .4rem; }
+.link--back .icon { width: 1.05em; }
