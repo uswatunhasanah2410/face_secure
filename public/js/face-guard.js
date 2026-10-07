@@ -66,7 +66,7 @@ window.FaceGuard = (() => {
   const TEST_GROUPS = [[4, 1], [13, 14, 0, 17], [199]];
   let pixCanvas = null, pixCtx = null;
 
-  function coverScore(source, lm) {
+  function grabFrame(source) {
     const W = source.videoWidth || source.naturalWidth || source.width;
     const H = source.videoHeight || source.naturalHeight || source.height;
     if (!pixCanvas) {
@@ -75,6 +75,26 @@ window.FaceGuard = (() => {
     }
     if (pixCanvas.width !== W || pixCanvas.height !== H) { pixCanvas.width = W; pixCanvas.height = H; }
     pixCtx.drawImage(source, 0, 0, W, H);
+    return [W, H];
+  }
+
+  // Rata-rata warna kulit (kromatisitas r, g, b yang dijumlah = 1) di dahi, antara alis, pangkal hidung, dan pipi
+  const SKIN_POINTS = [151, 9, 6, 50, 280, 205, 425];
+  function skinChroma(source, lm) {
+    const [W, H] = grabFrame(source);
+    const r = Math.max(3, Math.round(W * 0.012));
+    let R = 0, G = 0, B = 0;
+    for (const i of SKIN_POINTS) {
+      const x = Math.round(lm[i].x * W) - r, y = Math.round(lm[i].y * H) - r;
+      const d = pixCtx.getImageData(Math.max(0, x), Math.max(0, y), 2 * r + 1, 2 * r + 1).data;
+      for (let k = 0; k < d.length; k += 4) { R += d[k]; G += d[k + 1]; B += d[k + 2]; }
+    }
+    const sum = R + G + B || 1;
+    return [R / sum, G / sum, B / sum];
+  }
+
+  function coverScore(source, lm) {
+    const [W, H] = grabFrame(source);
     const r = Math.max(3, Math.round(W * 0.012));
     const chroma = idxs => {
       let cr = 0, cb = 0, n = 0;
@@ -115,7 +135,7 @@ window.FaceGuard = (() => {
   }
 
   /* ================= Model & kamera ================= */
-  let stream = null, video = null, overlay = null;
+  let stream = null, video = null, overlay = null, cameraLabel = '';
   let landmarker = null, faceApiReady = false, lastTs = -1;
 
   async function initTf() {
@@ -165,6 +185,14 @@ window.FaceGuard = (() => {
       throw new Error(err.name === 'NotAllowedError'
         ? 'Akses kamera ditolak. Izinkan kamera di pengaturan browser.'
         : 'Kamera tidak ditemukan atau sedang dipakai aplikasi lain.');
+    }
+    // Kamera virtual (OBS, ManyCam, dll.) bisa memutar video sebagai kamera -> ditolak
+    cameraLabel = stream.getVideoTracks()[0]?.label || '';
+    const blocked = cfg().blocked_cameras;
+    if (blocked && new RegExp(blocked, 'i').test(cameraLabel)) {
+      const name = cameraLabel;
+      stop(faceEl);
+      throw new Error(`Kamera virtual terdeteksi ("${name}"). Gunakan kamera asli perangkat Anda.`);
     }
     video = document.createElement('video');
     Object.assign(video, { autoplay: true, muted: true, playsInline: true, srcObject: stream });
@@ -228,7 +256,7 @@ window.FaceGuard = (() => {
     }));
   }
 
-  /* ================= Alur verifikasi (liveness + sampel) ================= */
+  /* ================= Tantangan gerakan (logika murni, bisa diuji tanpa kamera) ================= */
   const STEP_TEXT = {
     blink: 'Pejamkan mata sebentar, lalu buka kembali',
     turn_left: 'Tolehkan kepala ke KIRI Anda, lalu kembali lurus',
@@ -237,36 +265,144 @@ window.FaceGuard = (() => {
   };
   const STEP_LABEL = { blink: 'Kedipkan mata', turn_left: 'Toleh ke kiri', turn_right: 'Toleh ke kanan', open_mouth: 'Buka mulut' };
 
+  /*
+   * Pelacak 1 tantangan. update(metrik, ms sejak instruksi muncul) mengembalikan state:
+   *   waiting -> active (gerakan dimulai) -> done (kembali normal), atau fail.
+   * Anti video rekaman:
+   *   - gerakan menoleh/buka mulut sebelum react_min_ms = terlalu cepat untuk reaksi manusia -> gagal
+   *   - gerakan LAIN dari yang diminta (toleh arah salah, buka mulut saat diminta kedip, dll.) -> gagal
+   *   - kedip alami sebelum react_min_ms diabaikan (bukan dianggap gagal)
+   */
+  function createStepTracker(type, baseline, C) {
+    const Q = C.quality, L = C.liveness;
+    let phase = 0, peak = 0, onset = 0;
+    const fail = (code, message) => ({ state: 'fail', code, message });
+
+    const wrongAction = mt => {
+      if (type === 'turn_left' && -mt.yaw >= L.turn_deg) return 'menoleh ke kanan';
+      if (type === 'turn_right' && mt.yaw >= L.turn_deg) return 'menoleh ke kiri';
+      if ((type === 'blink' || type === 'open_mouth') && Math.abs(mt.yaw) >= L.turn_deg) return 'menoleh';
+      if (type !== 'open_mouth' && mt.jaw >= L.mouth_open) return 'membuka mulut';
+      return null;
+    };
+
+    return {
+      update(mt, t) {
+        if (t > L.step_timeout * 1000) {
+          return fail('liveness', `Tantangan "${STEP_LABEL[type]}" tidak terdeteksi. ` +
+            'Sistem tidak dapat memastikan Anda hadir langsung (bukan foto/video). Silakan ulangi.');
+        }
+        const wrong = wrongAction(mt);
+        if (wrong) {
+          return fail('wrong_action', `Gerakan tidak sesuai instruksi: terdeteksi ${wrong}, padahal diminta "${STEP_LABEL[type]}". ` +
+            'Ikuti hanya instruksi yang muncul di layar.');
+        }
+
+        let value, acting, back;
+        if (type === 'blink') {
+          value = mt.blink;
+          acting = mt.blink >= L.blink_closed && mt.blink - baseline >= L.blink_delta;
+          back = mt.blink <= baseline + L.blink_reopen;
+          if (phase === 0 && Math.abs(mt.yaw) > Q.max_yaw * 1.5) return { state: 'waiting', hint: 'front' };
+          if (phase === 0 && acting && t < L.react_min_ms) return { state: 'waiting' };   // kedip alami, abaikan
+        } else if (type === 'turn_left' || type === 'turn_right') {
+          value = type === 'turn_left' ? mt.yaw : -mt.yaw;
+          acting = value >= L.turn_deg;
+          back = value < Q.max_yaw;
+        } else {
+          value = mt.jaw;
+          acting = value >= L.mouth_open;
+          back = value <= L.mouth_closed;
+        }
+
+        if (phase === 0) {
+          if (!acting) return { state: 'waiting' };
+          if (t < L.react_min_ms) {
+            return fail('too_early', 'Gerakan terjadi sebelum instruksi muncul. Tunggu instruksi, lalu lakukan gerakannya.');
+          }
+          phase = 1; peak = value; onset = t;
+          return { state: 'active' };
+        }
+        peak = Math.max(peak, value);
+        if (back) {
+          return { state: 'done', result: { type, value: round(peak), onset_ms: Math.round(onset), ms: Math.round(t) } };
+        }
+        return { state: 'active' };
+      }
+    };
+  }
+
+  /* ================= Cek pantulan warna layar (logika murni) ================= */
+  const FLASH_RGB = { red: [1, 0, 0], green: [0, 1, 0], blue: [0, 0, 1] };
+  const FLASH_CSS = { red: '#ff0000', green: '#00ff00', blue: '#0000ff' };
+
+  /*
+   * colors : urutan warna yang ditampilkan, mis. ['red','blue','green',...]
+   * frames : [{ t: ms sejak kedipan pertama, c: [r, g, b] kromatisitas kulit }]
+   * Return { corr, amp, frames, ok }:
+   *   corr = kemiripan pola perubahan warna kulit dengan pola warna layar (-1..1)
+   *   amp  = besar perubahan warna kulit (wajah asli > layar HP)
+   */
+  function analyzeFlash(colors, frames, epochMs, skipMs) {
+    // Rata-rata warna kulit per warna layar; warna yang tidak kebagian frame (kamera tersendat) diabaikan
+    const epochs = colors.map((color, i) => {
+      const inEpoch = frames.filter(f => f.t >= i * epochMs + skipMs && f.t < (i + 1) * epochMs);
+      if (!inEpoch.length) return null;
+      return { color, mean: [0, 1, 2].map(k => inEpoch.reduce((s, f) => s + f.c.at(k), 0) / inEpoch.length) };
+    }).filter(Boolean);
+    if (epochs.length < 4 || new Set(epochs.map(e => e.color)).size < 3) {
+      return { corr: 0, amp: 0, frames: frames.length, ok: false };
+    }
+    const means = epochs.map(e => e.mean);
+
+    const center = rows => {
+      const avg = [0, 1, 2].map(k => rows.reduce((s, r) => s + r.at(k), 0) / rows.length);
+      return rows.map(r => r.map((v, k) => v - avg.at(k)));
+    };
+    const m = center(means).flat();
+    const e = center(epochs.map(ep => FLASH_RGB[ep.color])).flat();
+    const dot = m.reduce((s, v, i) => s + v * e.at(i), 0);
+    const nm = Math.sqrt(m.reduce((s, v) => s + v * v, 0));
+    const ne = Math.sqrt(e.reduce((s, v) => s + v * v, 0));
+    const corr = nm && ne ? dot / (nm * ne) : 0;
+    const amp = Math.sqrt(m.reduce((s, v) => s + v * v, 0) / m.length);
+    return { corr: round(corr), amp: round(amp, 5), frames: frames.length, ok: true };
+  }
+
+  /* ================= Alur verifikasi (liveness + sampel) ================= */
   class VerifyError extends Error {
     constructor(code, message) { super(message); this.code = code; }
   }
 
-  function renderSteps(listEl, steps, activeIndex, doneUntil) {
+  function renderSteps(listEl, items, activeIndex) {
     if (!listEl) return;
-    const items = ['Posisikan wajah', ...steps.map(s => STEP_LABEL[s]), 'Ambil sampel wajah'];
     listEl.innerHTML = items.map((label, i) => {
-      const cls = i < doneUntil ? 'is-done' : i === activeIndex ? 'is-active' : '';
+      const cls = activeIndex < 0 || i < activeIndex ? 'is-done' : i === activeIndex ? 'is-active' : '';
       return `<li class="${cls}"><span class="liveness__dot"></span>${label}</li>`;
     }).join('');
   }
 
   /**
    * Jalankan verifikasi lengkap.
-   *   challenge : { nonce, steps: ['blink', 'turn_left', ...] } dari server
+   *   challenge : { nonce, steps: [...3 tantangan], flash: ['red','blue',...] | null } dari server
    *   samples   : { before: n, after: n }
    * Return payload untuk dikirim ke server.
    */
   async function verify({ challenge, samples, onStatus, stepsEl }) {
-    const C = cfg(), Q = C.quality, L = C.liveness;
+    const C = cfg(), Q = C.quality, L = C.liveness, FL = C.flash;
     const startedAt = performance.now();
     const deadline = startedAt + L.total_timeout * 1000;
     const collected = [];
     const stepResults = [];
-    let lostSince = null, lastCenter = null, baseline = null;
+    let lostSince = null, lastCenter = null, baseline = null, flashResult = null;
 
     const status = (msg, type = '') => onStatus?.(msg, type);
     const steps = challenge.steps;
-    renderSteps(stepsEl, steps, 0, 0);
+    const flashColors = challenge.flash || null;
+    const items = ['Posisikan wajah', ...(flashColors ? ['Cek pantulan layar'] : []), ...steps.map(s => STEP_LABEL[s]), 'Ambil sampel wajah'];
+    let itemIndex = 0;
+    const nextItem = () => renderSteps(stepsEl, items, ++itemIndex);
+    renderSteps(stepsEl, items, 0);
 
     // Satu frame: tepat 1 wajah, tidak "melompat" (anti ganti orang/foto di tengah jalan)
     async function frame(withCover = false) {
@@ -353,80 +489,107 @@ window.FaceGuard = (() => {
       }
     }
 
-    // Satu tantangan liveness
-    async function challengeStep(type) {
+    // Layar berkedip warna acak; warna kulit wajah diukur tiap frame
+    async function flashCheck(colors) {
+      const veil = document.createElement('div');
+      veil.className = 'flash-overlay';
+      veil.innerHTML = '<p>Tetap tatap kamera...<br>Layar sedang memeriksa pantulan cahaya pada wajah Anda.</p>';
+      document.body.appendChild(veil);
+      const frames = [];
+      let shown = -1, lm = null;
+      // Posisi wajah cukup dideteksi sesekali (wajah diam); warna kulit diukur tiap frame -> ringan, banyak sampel
+      while (!lm) { const f = await frame(); lm = f?.res.faceLandmarks[0] ?? null; }
       const t0 = performance.now();
-      let phase = 0;          // 0 = menunggu aksi, 1 = aksi terdeteksi -> menunggu kembali normal
-      let peak = null;
-      status(STEP_TEXT[type], 'action');
-      while (true) {
-        if (performance.now() - t0 > L.step_timeout * 1000) {
-          throw new VerifyError('liveness', `Tantangan "${STEP_LABEL[type]}" tidak terdeteksi. ` +
-            'Sistem tidak dapat memastikan Anda hadir langsung (bukan foto/video). Silakan ulangi.');
+      try {
+        while (true) {
+          const t = performance.now() - t0;
+          const i = Math.floor(t / FL.epoch_ms);
+          if (i >= colors.length) break;
+          if (i !== shown) { veil.style.background = FLASH_CSS[colors.at(i)]; shown = i; }
+          await new Promise(r => requestAnimationFrame(r));
+          frames.push({ t: performance.now() - t0, c: skinChroma(video, lm) });
         }
-        const f = await frame();
-        if (!f) continue;
-        const mt = f.mt;
-        drawDebug(f.res, mt, `tantangan ${type} fase ${phase}`);
-        if (!mt.inFrame) { status('Wajah keluar dari frame. ' + STEP_TEXT[type], 'error'); continue; }
-
-        if (type === 'blink') {
-          // Kedip hanya dihitung saat wajah menghadap depan
-          if (Math.abs(mt.yaw) > Q.max_yaw * 1.5) { status('Hadapkan wajah lurus, lalu pejamkan mata sebentar.', 'action'); continue; }
-          const closed = mt.blink >= L.blink_closed && mt.blink - baseline >= L.blink_delta;
-          if (phase === 0 && closed) { phase = 1; peak = mt.blink; }
-          else if (phase === 1) {
-            peak = Math.max(peak, mt.blink);
-            if (mt.blink <= baseline + L.blink_reopen) break;      // mata terbuka lagi
-          }
-        } else if (type === 'turn_left' || type === 'turn_right') {
-          const yaw = type === 'turn_left' ? mt.yaw : -mt.yaw;
-          if (phase === 0 && yaw >= L.turn_deg) { phase = 1; peak = yaw; }
-          else if (phase === 1) {
-            peak = Math.max(peak, yaw);
-            if (yaw < Q.max_yaw) break;                             // sudah kembali lurus
-          }
-        } else if (type === 'open_mouth') {
-          if (phase === 0 && mt.jaw >= L.mouth_open) { phase = 1; peak = mt.jaw; }
-          else if (phase === 1) {
-            peak = Math.max(peak, mt.jaw);
-            if (mt.jaw <= L.mouth_closed) break;
-          }
-        }
+      } finally {
+        veil.remove();
       }
-      stepResults.push({ type, value: round(peak), ms: Math.round(performance.now() - t0) });
+      // Wajah harus masih ada di tempat yang sama setelah kedipan (frame() menolak bila hilang/melompat)
+      let after = null;
+      while (!after) after = await frame();
+      const r = analyzeFlash(colors, frames, FL.epoch_ms, FL.skip_ms);
+      drawDebug(null, null, `pantulan layar: corr=${r.corr} amp=${r.amp} frame=${r.frames}`);
+      if (isDebug()) console.info('[face] pantulan layar', r);
+      if (!r.ok) {
+        throw new VerifyError('flash', 'Kamera terlalu lambat untuk memeriksa pantulan layar. Tutup aplikasi lain lalu ulangi.');
+      }
+      if (r.corr < FL.min_corr || r.amp < FL.min_amp) {
+        throw new VerifyError('replay', 'Pantulan cahaya layar pada wajah tidak terdeteksi. Wajah kemungkinan ditampilkan dari layar/video. ' +
+          'Jika ini wajah asli, naikkan kecerahan layar, dekatkan wajah, dan hindari ruangan yang terlalu terang.');
+      }
+      return { colors, corr: r.corr, amp: r.amp, frames: r.frames };
     }
 
-    // ---- Urutan: posisi -> sampel awal -> tantangan acak -> posisi -> sampel akhir ----
+    // Jeda acak lalu satu tantangan
+    async function challengeStep(type) {
+      const gap = L.gap_min_ms + Math.random() * (L.gap_max_ms - L.gap_min_ms);
+      const g0 = performance.now();
+      status('Bersiap... tetap lurus menghadap kamera', '');
+      while (performance.now() - g0 < gap) await frame();
+
+      const tracker = createStepTracker(type, baseline, C);
+      const t0 = performance.now();
+      status(STEP_TEXT[type], 'action');
+      while (true) {
+        const f = await frame();
+        if (!f) continue;
+        drawDebug(f.res, f.mt, `tantangan ${type}`);
+        if (!f.mt.inFrame) { status('Wajah keluar dari frame. ' + STEP_TEXT[type], 'error'); continue; }
+        const r = tracker.update(f.mt, performance.now() - t0);
+        if (r.state === 'fail') throw new VerifyError(r.code, r.message);
+        if (r.state === 'done') { stepResults.push(r.result); return; }
+        status(r.hint === 'front' ? 'Hadapkan wajah lurus, lalu pejamkan mata sebentar.' : STEP_TEXT[type], 'action');
+      }
+    }
+
+    // ---- Urutan: posisi -> sampel awal -> kedipan warna -> tantangan acak -> posisi -> sampel akhir ----
     status('Posisikan wajah lurus di tengah lingkaran.', '');
     baseline = await align(Q.eye_open_max);
     const eyeLimit = Math.min(Q.eye_open_max, baseline + L.blink_reopen);
     await capture(samples.before, eyeLimit);
-    renderSteps(stepsEl, steps, 1, 1);
+    nextItem();
 
-    for (let i = 0; i < steps.length; i++) {
-      await challengeStep(steps[i]);
-      renderSteps(stepsEl, steps, i + 2, i + 2);
+    if (flashColors) {
+      status('Layar akan berkedip warna. Tetap tatap kamera.', 'action');
+      await sleep(600);
+      flashResult = await flashCheck(flashColors);
+      nextItem();
+    }
+
+    for (const type of steps) {
+      await challengeStep(type);
+      nextItem();
     }
 
     status('Kembali lurus menghadap kamera.', '');
     await align(eyeLimit);
     await capture(samples.after, eyeLimit);
     const image = snapshot();
-    renderSteps(stepsEl, steps, -1, steps.length + 2);
+    renderSteps(stepsEl, items, -1);
 
     return {
       nonce: challenge.nonce,
       samples: collected,
       eye_baseline: round(baseline),
       steps: stepResults,
+      flash: flashResult,
+      camera: cameraLabel,
       duration_ms: Math.round(performance.now() - startedAt),
       image
     };
   }
 
   return {
-    headPose, mpMetrics, coverScore, checkQuality,     // dipakai juga untuk pengujian/kalibrasi
+    headPose, mpMetrics, coverScore, checkQuality,      // dipakai juga untuk pengujian/kalibrasi
+    createStepTracker, analyzeFlash,
     loadModels, start, stop, verify, VerifyError,
     isRunning: () => !!stream
   };

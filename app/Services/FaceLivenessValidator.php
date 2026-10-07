@@ -27,9 +27,12 @@ class FaceLivenessValidator
         $extras = collect($L['extra_pool'])->shuffle()->take(max(0, (int) $L['extra_steps']))->all();
         $steps = collect(['blink', ...$extras])->shuffle()->values()->all();
 
+        $flash = config('face.flash.enabled') ? $this->flashColors((int) config('face.flash.count')) : null;
+
         $challenge = [
             'nonce'     => Str::random(40),
             'steps'     => $steps,
+            'flash'     => $flash,
             'issued_at' => now()->getTimestampMs() / 1000,
         ];
         session([self::SESSION_PREFIX . $context => $challenge]);
@@ -37,6 +40,7 @@ class FaceLivenessValidator
         return [
             'nonce'      => $challenge['nonce'],
             'steps'      => $steps,
+            'flash'      => $flash,
             'expires_in' => $L['challenge_ttl'],
             'samples'    => config("face.samples.{$context}"),
         ];
@@ -67,6 +71,13 @@ class FaceLivenessValidator
             return $this->fail('too_fast', 'Proses verifikasi terlalu cepat dan tidak wajar. Silakan ulangi.');
         }
 
+        // ---- 1b. Kamera virtual ditolak ----
+        $camera = (string) ($payload['camera'] ?? '');
+        $blocked = config('face.blocked_cameras');
+        if ($blocked && preg_match('/' . $blocked . '/i', $camera)) {
+            return $this->fail('camera', 'Kamera virtual terdeteksi. Gunakan kamera asli perangkat Anda.');
+        }
+
         // ---- 2. Kondisi mata normal (revisi 5) ----
         $baseline = $payload['eye_baseline'] ?? null;
         if (! is_numeric($baseline) || $baseline < 0 || $baseline > $Q['eye_open_max']) {
@@ -83,6 +94,11 @@ class FaceLivenessValidator
             return $this->fail('liveness', 'Tantangan liveness tidak lengkap atau urutannya tidak sesuai. Silakan ulangi.');
         }
         foreach ($steps as $step) {
+            // Anti video rekaman: gerakan harus dimulai SETELAH instruksi muncul, dalam waktu reaksi manusia
+            $onset = $step['onset_ms'] ?? null;
+            if (! is_numeric($onset) || $onset < $L['react_min_ms'] || $onset > $L['react_max_ms']) {
+                return $this->fail('timing', 'Waktu gerakan tidak sesuai dengan munculnya instruksi. Pastikan Anda hadir langsung (bukan video).');
+            }
             $value = is_numeric($step['value'] ?? null) ? (float) $step['value'] : -1;
             $passed = match ($step['type']) {
                 'blink'      => $value >= $L['blink_closed'] && $value - $baseline >= $L['blink_delta'] && $value <= 1,
@@ -92,6 +108,19 @@ class FaceLivenessValidator
             };
             if (! $passed) {
                 return $this->fail('liveness', 'Gerakan liveness tidak terdeteksi dengan benar. Pastikan Anda hadir langsung di depan kamera (bukan foto/video).');
+            }
+        }
+
+        // ---- 3b. Pantulan warna layar pada wajah (anti video di layar HP) ----
+        if ($challenge['flash']) {
+            $F = config('face.flash');
+            $flash = $payload['flash'] ?? null;
+            if (! is_array($flash) || ($flash['colors'] ?? null) !== $challenge['flash']
+                || ! is_numeric($flash['corr'] ?? null) || ! is_numeric($flash['amp'] ?? null)) {
+                return $this->fail('replay', 'Pemeriksaan pantulan layar tidak lengkap. Silakan ulangi.');
+            }
+            if ($flash['corr'] < $F['min_corr'] || $flash['amp'] < $F['min_amp']) {
+                return $this->fail('replay', 'Pantulan cahaya layar pada wajah tidak terdeteksi. Wajah kemungkinan ditampilkan dari layar/video.');
             }
         }
 
@@ -151,6 +180,21 @@ class FaceLivenessValidator
         }
 
         return null;
+    }
+
+    /** Urutan warna acak: tiap warna muncul, tidak ada warna yang sama berturut-turut. */
+    private function flashColors(int $count): array
+    {
+        $base = ['red', 'green', 'blue'];
+        do {
+            $colors = [];
+            for ($i = 0; $i < $count; $i++) {
+                $choices = array_values(array_diff($base, [end($colors) ?: null]));
+                $colors[] = $choices[random_int(0, count($choices) - 1)];
+            }
+        } while (count(array_unique($colors)) < 3);
+
+        return $colors;
     }
 
     private function fail(string $code, string $message): array

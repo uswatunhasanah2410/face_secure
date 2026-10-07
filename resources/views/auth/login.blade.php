@@ -83,12 +83,21 @@
 @endsection
 
 @push('scripts')
+    @php
+        // Disusun di sini: @json(...) Blade memecah argumen berdasarkan koma, jadi array panjang tidak boleh ditulis langsung di dalamnya
+        $faceConfig = [
+            'quality'         => config('face.quality'),
+            'liveness'        => config('face.liveness'),
+            'flash'           => config('face.flash'),
+            'blocked_cameras' => config('face.blocked_cameras'),
+        ];
+    @endphp
     <script>
         window.AppConfig = {
             step: {{ $step }},
             modelsUrl: @json(asset('models')),
             mediapipeWasm: @json(asset('vendor/mediapipe/wasm')),
-            face: @json(['quality' => config('face.quality'), 'liveness' => config('face.liveness')]),
+            face: @json($faceConfig),
             routes: {
                 login: @json(route('login.store')),
                 challenge: @json(route('login.face.challenge')),

@@ -53,20 +53,42 @@ return [
     'liveness' => [
         // "blink" selalu ada. Ditambah sejumlah tantangan acak dari daftar ini, urutan diacak.
         'extra_pool'      => ['turn_left', 'turn_right', 'open_mouth'],
-        'extra_steps'     => (int) env('FACE_LIVENESS_EXTRA_STEPS', 1),
+        'extra_steps'     => (int) env('FACE_LIVENESS_EXTRA_STEPS', 2),   // total 3 tantangan
         'blink_closed'    => 0.45,   // skor eyeBlink saat mata terpejam (mata terbuka ~0.05)
         'blink_delta'     => 0.30,   // dan naik minimal 0.30 dari kondisi normal pengguna
         'blink_reopen'    => 0.15,   // dianggap terbuka lagi jika <= normal + 0.15
         'turn_deg'        => 20,     // menoleh minimal 20 derajat
         'mouth_open'      => 0.40,   // skor jawOpen mulut terbuka
         'mouth_closed'    => 0.15,
-        'step_timeout'    => 10,     // detik per tantangan
+        'step_timeout'    => 7,      // detik per tantangan
+        // Anti video rekaman: gerakan harus terjadi SETELAH instruksi muncul (reaksi manusia), bukan sebelumnya
+        'react_min_ms'    => 300,
+        'react_max_ms'    => 6000,
+        // Jeda acak sebelum instruksi berikutnya muncul (ms), supaya waktunya tidak bisa ditebak video
+        'gap_min_ms'      => 500,
+        'gap_max_ms'      => 1400,
         'total_timeout'   => 90,     // detik untuk seluruh proses
         'max_lost_ms'     => 1500,   // wajah boleh hilang sesaat maksimal 1,5 detik
         'max_jump'        => 0.25,   // perpindahan posisi wajah antar frame maksimal (proporsi frame)
         'challenge_ttl'   => 120,    // detik masa berlaku tantangan dari server
         'min_duration_ms' => 1500,   // proses yang terlalu cepat dianggap tidak wajar (otomatisasi)
     ],
+
+    // ---------- Anti video di layar HP: pantulan warna layar (revisi lanjutan) ----------
+    // Layar laptop berkedip warna acak. Wajah asli memantulkan warna itu; wajah yang ditampilkan
+    // di layar HP memancarkan cahayanya sendiri sehingga warnanya tidak ikut berubah.
+    // Lihat nilai corr & amp Anda dengan ?debug=1 lalu sesuaikan bila perlu.
+    'flash' => [
+        'enabled'  => (bool) env('FACE_FLASH_ENABLED', true),
+        'count'    => 6,       // jumlah kedipan warna
+        'epoch_ms' => 450,     // lama tiap warna
+        'skip_ms'  => 150,     // abaikan awal tiap warna (jeda kamera menyesuaikan)
+        'min_corr' => (float) env('FACE_FLASH_MIN_CORR', 0.5),     // kecocokan pola warna (-1..1)
+        'min_amp'  => (float) env('FACE_FLASH_MIN_AMP', 0.0015),   // besar perubahan warna kulit
+    ],
+
+    // Kamera virtual (aplikasi yang bisa memutar video sebagai kamera) ditolak
+    'blocked_cameras' => 'obs|virtual|manycam|xsplit|snap camera|camtwist|e2esoft|vcam|splitcam|youcam|droidcam|iriun|epoccam',
 
     // Batas percobaan verifikasi wajah saat login sebelum akun dikunci sementara
     'lockout' => [

@@ -24,7 +24,8 @@ class FaceAuthFlowTest extends TestCase
     {
         parent::setUp();
         // Tes memakai nilai default, tidak terpengaruh isi .env
-        config(['face.liveness.extra_steps' => 1, 'face.liveness.challenge_ttl' => 120, 'face.liveness.total_timeout' => 90]);
+        config(['face.liveness.extra_steps' => 2, 'face.liveness.challenge_ttl' => 120, 'face.liveness.total_timeout' => 90,
+                'face.flash.enabled' => true, 'face.flash.min_corr' => 0.5, 'face.flash.min_amp' => 0.0015]);
     }
 
     /** Descriptor palsu 128 angka; $person berbeda = orang berbeda, $jitter = variasi kecil antar foto */
@@ -59,11 +60,12 @@ class FaceAuthFlowTest extends TestCase
         }
         $steps = array_map(fn ($t) => ['type' => $t, 'value' => match ($t) {
             'blink' => 0.72, 'turn_left', 'turn_right' => 27.0, 'open_mouth' => 0.6,
-        }, 'ms' => 900], $ch['steps']);
+        }, 'onset_ms' => 750, 'ms' => 1400], $ch['steps']);
 
         $payload = array_merge([
             'nonce' => $ch['nonce'], 'samples' => $samples, 'eye_baseline' => 0.05,
-            'steps' => $steps, 'duration_ms' => 4000,
+            'steps' => $steps, 'duration_ms' => 4000, 'camera' => 'HD Webcam (04f2:b6d9)',
+            'flash' => $ch['flash'] ? ['colors' => $ch['flash'], 'corr' => 0.86, 'amp' => 0.0042, 'frames' => 64] : null,
         ], $override);
 
         return $mutate ? $mutate($payload) : $payload;
@@ -215,6 +217,72 @@ class FaceAuthFlowTest extends TestCase
         foreach (array_keys($seen) as $combo) {
             $this->assertStringContainsString('blink', $combo);
         }
+    }
+
+    // ================= Revisi lanjutan: anti video di layar HP =================
+
+    public function test_video_challenge_has_three_random_steps_and_flash_colors(): void
+    {
+        $this->registerUntilFace('a@x.com');
+        $ch = $this->postJson('/register/face/challenge')->json();
+        $this->assertCount(3, $ch['steps']);
+        $this->assertContains('blink', $ch['steps']);
+        $this->assertCount(3, array_unique($ch['steps']));
+        $this->assertCount(6, $ch['flash']);
+        $this->assertEqualsCanonicalizing(['red', 'green', 'blue'], array_values(array_unique($ch['flash'])));
+        for ($i = 1; $i < 6; $i++) {
+            $this->assertNotSame($ch['flash'][$i - 1], $ch['flash'][$i], 'warna tidak boleh sama berturut-turut');
+        }
+    }
+
+    public function test_video_movement_before_instruction_is_rejected(): void
+    {
+        $this->registerUser('a@x.com', 1.0);
+        $this->loginPassword('a@x.com');
+
+        $payload = $this->facePayload('login', 1.0, [], function ($p) {
+            $p['steps'][1]['onset_ms'] = 120;   // bergerak 0,12 detik setelah instruksi: terlalu cepat untuk manusia
+            return $p;
+        });
+        $this->postJson('/login/face', $payload)->assertStatus(422)->assertJsonPath('code', 'timing');
+        $this->assertGuest();
+    }
+
+    public function test_video_on_phone_screen_without_reflection_is_rejected(): void
+    {
+        $this->registerUser('a@x.com', 1.0);
+        $this->loginPassword('a@x.com');
+
+        // Layar HP: warna kulit tidak ikut berubah saat layar laptop berkedip
+        $payload = $this->facePayload('login', 1.0, [], function ($p) {
+            $p['flash']['corr'] = 0.08;
+            $p['flash']['amp'] = 0.0004;
+            return $p;
+        });
+        $this->postJson('/login/face', $payload)->assertStatus(422)->assertJsonPath('code', 'replay');
+
+        // Urutan warna tidak sesuai yang diberikan server
+        FaceSecure::query()->update(['failed_attempts' => 0]);
+        $payload = $this->facePayload('login', 1.0, [], function ($p) {
+            $p['flash']['colors'] = array_reverse($p['flash']['colors']);
+            return $p;
+        });
+        $this->postJson('/login/face', $payload)->assertStatus(422)->assertJsonPath('code', 'replay');
+
+        // Pemeriksaan pantulan dilewati
+        $this->postJson('/login/face', $this->facePayload('login', 1.0, ['flash' => null]))
+            ->assertStatus(422)->assertJsonPath('code', 'replay');
+        $this->assertGuest();
+    }
+
+    public function test_virtual_camera_is_rejected(): void
+    {
+        $this->registerUser('a@x.com', 1.0);
+        $this->loginPassword('a@x.com');
+
+        $this->postJson('/login/face', $this->facePayload('login', 1.0, ['camera' => 'OBS Virtual Camera']))
+            ->assertStatus(422)->assertJsonPath('code', 'camera');
+        $this->assertGuest();
     }
 
     // ================= Revisi 3: wajah utuh =================
