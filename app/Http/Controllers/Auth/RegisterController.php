@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\FaceSecure;
 use App\Models\User;
+use App\Services\FaceLivenessValidator;
 use App\Services\FaceMatcher;
 use App\Services\OtpService;
 use Illuminate\Http\JsonResponse;
@@ -27,6 +28,7 @@ class RegisterController extends Controller
     public function __construct(
         private OtpService $otp,
         private FaceMatcher $faces,
+        private FaceLivenessValidator $liveness,
     ) {}
 
     public function create(): View
@@ -153,6 +155,20 @@ class RegisterController extends Controller
 
     // ---------- Step 3: Verifikasi wajah ----------
 
+    /** Tantangan liveness acak (kedip + gerakan) untuk verifikasi wajah registrasi. */
+    public function faceChallenge(): JsonResponse
+    {
+        $reg = session('register');
+        if (! $reg) {
+            return $this->restart();
+        }
+        if (empty($reg['email_verified'])) {
+            return response()->json(['message' => 'Verifikasi email terlebih dahulu.'], 422);
+        }
+
+        return response()->json($this->liveness->issue('register'));
+    }
+
     public function storeFace(Request $request): JsonResponse
     {
         $reg = session('register');
@@ -163,13 +179,17 @@ class RegisterController extends Controller
             return response()->json(['message' => 'Verifikasi email terlebih dahulu.'], 422);
         }
 
-        $descriptor = $this->faces->parse($request->input('face_descriptor'));
-        if (! $descriptor) {
-            return response()->json(['message' => 'Wajah tidak terdeteksi. Pastikan wajah terlihat jelas lalu coba lagi.'], 422);
-        }
+        // Liveness + kualitas (utuh, lurus, mata terbuka) + konsistensi sampel
+        $result = $this->liveness->validate($request->all(), 'register');
+        if (! $result['ok']) {
+            Log::info('Registrasi wajah ditolak', ['email' => $reg['email'], 'code' => $result['code']]);
 
-        if ($this->faces->isAlreadyRegistered($descriptor)) {
-            return response()->json(['message' => 'Wajah ini sudah terdaftar pada akun lain.'], 422);
+            return response()->json(['message' => $result['message'], 'code' => $result['code']], 422);
+        }
+        $samples = $result['samples'];
+
+        if ($this->faces->isAlreadyRegistered($samples)) {
+            return response()->json(['message' => 'Wajah ini sudah terdaftar pada akun lain.', 'code' => 'duplicate'], 422);
         }
 
         // Cegah race condition: email bisa saja sudah terdaftar sejak langkah 1
@@ -180,7 +200,7 @@ class RegisterController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($reg, $descriptor, $request) {
+            DB::transaction(function () use ($reg, $samples, $result, $request) {
                 $user = User::create([
                     'name'              => $reg['name'],
                     'email'             => $reg['email'],
@@ -190,8 +210,10 @@ class RegisterController extends Controller
 
                 FaceSecure::create([
                     'user_id'         => $user->id,
-                    'face_descriptor' => $descriptor,
-                    'image_path'      => $this->storeImage($request->input('face_image'), $user->id),
+                    'face_descriptor' => $samples,
+                    'eye_baseline'    => $result['eye_baseline'],
+                    'samples_count'   => count($samples),
+                    'image_path'      => $this->storeImage($request->input('image'), $user->id),
                 ]);
             });
         } catch (\Throwable $e) {

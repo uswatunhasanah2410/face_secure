@@ -38,5 +38,7 @@
 @unless (View::hasSection('no-camera'))
     @prepend('scripts')
         <script src="{{ asset('vendor/face-api/face-api.js') }}"></script>
+        <script src="{{ asset('vendor/mediapipe/vision_bundle.js') }}"></script>
+        <script src="{{ asset('js/face-guard.js') }}"></script>
     @endprepend
 @endunless

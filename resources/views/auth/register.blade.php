@@ -122,10 +122,14 @@
         <p class="auth__desc">Pastikan wajah Anda terlihat jelas untuk melakukan<br>verifikasi identitas.</p>
         <div class="face" id="face">(Wajah)</div>
         <p class="face-status" id="face-status"></p>
+        <ol class="liveness" id="liveness"></ol>
+        @if (request()->has('debug'))
+            <pre class="face-debug" id="face-debug">Mode debug: metrik wajah tampil di sini.</pre>
+        @endif
         <ul class="tips">
-            <li>Cari tempat dengan pencahayaan cukup</li>
-            <li>Pastikan wajah terlihat jelas</li>
-            <li>Tatap kamera secara langsung</li>
+            <li>Pastikan seluruh wajah terlihat dan menghadap lurus ke kamera</li>
+            <li>Buka mata, lepas masker/kacamata gelap, pencahayaan cukup</li>
+            <li>Ikuti instruksi gerakan yang muncul (kedip, toleh, atau buka mulut)</li>
         </ul>
         <button type="button" class="btn-primary" id="btn-mulai-wajah">Mulai Verifikasi</button>
         <div class="auth__links">
@@ -143,10 +147,13 @@
             step: {{ $step }},
             draft: @json($draft),
             modelsUrl: @json(asset('models')),
+            mediapipeWasm: @json(asset('vendor/mediapipe/wasm')),
+            face: @json(['quality' => config('face.quality'), 'liveness' => config('face.liveness')]),
             routes: {
                 store:  @json(route('register.store')),
                 verify: @json(route('register.verify-email')),
                 resend: @json(route('register.resend')),
+                challenge: @json(route('register.face.challenge')),
                 face:   @json(route('register.face')),
             },
         };

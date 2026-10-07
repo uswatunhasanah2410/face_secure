@@ -27,6 +27,6 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('otp-verify', fn (Request $r) => Limit::perMinute(10)->by('otp-verify|' . $r->ip()));
         RateLimiter::for('otp-resend', fn (Request $r) => Limit::perMinute(3)->by('otp-resend|' . $r->ip()));
         RateLimiter::for('password-reset', fn (Request $r) => Limit::perMinute(15)->by('password-reset|' . $r->ip()));
-        RateLimiter::for('face', fn (Request $r) => Limit::perMinute(10)->by('face|' . $r->ip()));
+        RateLimiter::for('face', fn (Request $r) => Limit::perMinute(20)->by('face|' . $r->ip()));   // challenge + submit
     }
 }

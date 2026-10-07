@@ -18,12 +18,16 @@ Route::middleware('guest')->group(function () {
         ->middleware('throttle:otp-verify')->name('register.verify-email');
     Route::post('/register/resend-code', [RegisterController::class, 'resendOtp'])
         ->middleware('throttle:otp-resend')->name('register.resend');
+    Route::post('/register/face/challenge', [RegisterController::class, 'faceChallenge'])
+        ->middleware('throttle:face')->name('register.face.challenge');
     Route::post('/register/face', [RegisterController::class, 'storeFace'])
         ->middleware('throttle:face')->name('register.face');
 
     // Login
     Route::get('/login', [LoginController::class, 'create'])->name('login');
     Route::post('/login', [LoginController::class, 'store'])->name('login.store');
+    Route::post('/login/face/challenge', [LoginController::class, 'faceChallenge'])
+        ->middleware('throttle:face')->name('login.face.challenge');
     Route::post('/login/face', [LoginController::class, 'verifyFace'])
         ->middleware('throttle:face')->name('login.face');
 

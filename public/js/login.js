@@ -9,7 +9,7 @@
   function goTo(n) {
     panels.forEach((p, i) => p.classList.toggle('hidden', i + 1 !== n));
     App.setStep(stepper, n);
-    if (n !== 2) App.Face.stop(faceEl);
+    if (n !== 2) FaceGuard.stop(faceEl);
   }
 
   // Sesi login habis / akun dikunci -> kembali ke langkah 1 dengan pesan dari server
@@ -55,13 +55,29 @@
   /* ---------- Step 2: Verifikasi wajah ---------- */
   f('btn-kembali').addEventListener('click', () => goTo(1));
 
+  const faceFail = message => {
+    App.setStep(stepper, 2, 'error');
+    App.showModal({
+      type: 'error',
+      title: 'Login Gagal',
+      message: App.esc(message),
+      button: 'Coba Lagi',
+      onClose: () => App.setStep(stepper, 2)
+    });
+  };
+
   App.bindFaceButton({
     btn: f('btn-mulai-wajah'),
     faceEl,
     statusEl: f('face-status'),
-    submit: async ({ descriptor }) => {
+    stepsEl: f('liveness'),
+    challengeUrl: C.routes.challenge,
+    onRestart: restart,
+    onFail: faceFail,
+    submit: async ({ image, ...payload }) => {   // foto tidak perlu dikirim saat login
       App.setStep(stepper, 2);
-      const r = await App.api(C.routes.face, { face_descriptor: JSON.stringify(descriptor) });
+      const r = await App.api(C.routes.face, payload);
+      if (r.data.debug) console.info('[face] jarak wajah', r.data.debug);
 
       if (r.ok) {
         App.markAllDone(stepper);
@@ -76,14 +92,7 @@
       }
       if (r.data.restart) return restart(r.data.message);
 
-      App.setStep(stepper, 2, 'error');
-      App.showModal({
-        type: 'error',
-        title: 'Login Gagal',
-        message: App.esc(r.data.message),
-        button: 'Coba Lagi',
-        onClose: () => App.setStep(stepper, 2)
-      });
+      faceFail(r.data.message);
     }
   });
 

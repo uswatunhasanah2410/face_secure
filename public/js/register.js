@@ -9,7 +9,7 @@
   function goTo(n) {
     panels.forEach((p, i) => p.classList.toggle('hidden', i + 1 !== n));
     App.setStep(stepper, n);
-    if (n !== 3) App.Face.stop(faceEl);
+    if (n !== 3) FaceGuard.stop(faceEl);
     if (n === 2) otp.focus();
   }
 
@@ -101,13 +101,28 @@
   /* ---------- Step 3: Wajah ---------- */
   f('btn-kembali').addEventListener('click', () => goTo(2));
 
+  const faceFail = message => {
+    App.setStep(stepper, 3, 'error');
+    App.showModal({
+      type: 'error',
+      title: 'Registrasi Gagal',
+      message: App.esc(message),
+      button: 'Coba Lagi',
+      onClose: () => App.setStep(stepper, 3)
+    });
+  };
+
   App.bindFaceButton({
     btn: f('btn-mulai-wajah'),
     faceEl,
     statusEl: f('face-status'),
-    submit: async ({ descriptor, image }) => {
+    stepsEl: f('liveness'),
+    challengeUrl: C.routes.challenge,
+    onRestart: restart,
+    onFail: faceFail,
+    submit: async payload => {
       App.setStep(stepper, 3);
-      const r = await App.api(C.routes.face, { face_descriptor: JSON.stringify(descriptor), face_image: image });
+      const r = await App.api(C.routes.face, payload);
 
       if (r.ok) {
         App.markAllDone(stepper);
@@ -122,14 +137,7 @@
       }
       if (r.data.restart) return restart(r.data.message);
 
-      App.setStep(stepper, 3, 'error');
-      App.showModal({
-        type: 'error',
-        title: 'Registrasi Gagal',
-        message: App.esc(r.data.message),
-        button: 'Coba Lagi',
-        onClose: () => App.setStep(stepper, 3)
-      });
+      faceFail(r.data.message);
     }
   });
 

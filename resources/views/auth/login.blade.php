@@ -63,9 +63,14 @@
         <p class="auth__desc">Pastikan wajah Anda terlihat jelas di dalam kamera.</p>
         <div class="face" id="face">(Wajah)</div>
         <p class="face-status" id="face-status"></p>
+        <ol class="liveness" id="liveness"></ol>
+        @if (request()->has('debug'))
+            <pre class="face-debug" id="face-debug">Mode debug: metrik wajah tampil di sini.</pre>
+        @endif
         <ul class="tips">
-            <li>Posisikan wajah di tengah area kamera</li>
-            <li>Pastikan pencahayaan cukup dan wajah terlihat jelas.</li>
+            <li>Pastikan seluruh wajah terlihat dan menghadap lurus ke kamera</li>
+            <li>Buka mata, lepas masker/kacamata gelap, pencahayaan cukup</li>
+            <li>Ikuti instruksi gerakan yang muncul (kedip, toleh, atau buka mulut)</li>
         </ul>
         <button type="button" class="btn-primary" id="btn-mulai-wajah">Mulai Verifikasi</button>
         <div class="auth__links">
@@ -82,8 +87,11 @@
         window.AppConfig = {
             step: {{ $step }},
             modelsUrl: @json(asset('models')),
+            mediapipeWasm: @json(asset('vendor/mediapipe/wasm')),
+            face: @json(['quality' => config('face.quality'), 'liveness' => config('face.liveness')]),
             routes: {
                 login: @json(route('login.store')),
+                challenge: @json(route('login.face.challenge')),
                 face:  @json(route('login.face')),
             },
         };

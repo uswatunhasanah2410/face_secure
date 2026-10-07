@@ -4,11 +4,13 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\FaceLivenessValidator;
 use App\Services\FaceMatcher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
@@ -21,11 +23,12 @@ use Illuminate\View\View;
 class LoginController extends Controller
 {
     private const MAX_PASSWORD_ATTEMPTS = 5;   // per email+IP, per menit
-    private const MAX_FACE_ATTEMPTS = 5;       // lalu akun dikunci sementara
-    private const FACE_LOCK_MINUTES = 15;
     private const PENDING_TTL_MINUTES = 5;     // batas waktu antara langkah 1 dan 2
 
-    public function __construct(private FaceMatcher $faces) {}
+    public function __construct(
+        private FaceMatcher $faces,
+        private FaceLivenessValidator $liveness,
+    ) {}
 
     public function create(): View
     {
@@ -84,6 +87,22 @@ class LoginController extends Controller
 
     // ---------- Step 2: Verifikasi wajah ----------
 
+    /** Tantangan liveness acak (kedip + gerakan) untuk verifikasi wajah login. */
+    public function faceChallenge(): JsonResponse
+    {
+        $user = $this->pendingUser();
+        if (! $user) {
+            return $this->restart('Sesi login habis. Silakan masuk kembali.');
+        }
+        if ($user->faceSecure->isLocked()) {
+            session()->forget('login_pending');
+
+            return $this->restart($this->lockedMessage($user->faceSecure->locked_until), 423);
+        }
+
+        return response()->json($this->liveness->issue('login'));
+    }
+
     public function verifyFace(Request $request): JsonResponse
     {
         $user = $this->pendingUser();
@@ -99,9 +118,19 @@ class LoginController extends Controller
             return $this->restart($this->lockedMessage($face->locked_until), 423);
         }
 
-        $descriptor = $this->faces->parse($request->input('face_descriptor'));
+        // 1. Liveness + kualitas wajah (utuh, lurus, mata terbuka) + konsistensi sampel
+        $result = $this->liveness->validate($request->all(), 'login', $face->eye_baseline);
 
-        if ($descriptor && $this->faces->matches($descriptor, $face->face_descriptor)) {
+        // 2. Cocokkan SEMUA sampel login dengan sampel tersimpan
+        $match = $result['ok'] ? $this->faces->match($result['samples'], $face->samples()) : null;
+
+        Log::info('Verifikasi wajah login', [
+            'user_id' => $user->id,
+            'liveness' => $result['ok'] ? 'ok' : $result['code'],
+            'distance' => $match['worst'] ?? null,
+        ]);
+
+        if ($match && $match['ok']) {
             $face->update([
                 'failed_attempts'  => 0,
                 'locked_until'     => null,
@@ -112,32 +141,41 @@ class LoginController extends Controller
             Auth::login($user);
             $request->session()->regenerate();
 
-            return response()->json(['ok' => true, 'redirect' => route('home')]);
+            return response()->json(['ok' => true, 'redirect' => route('home')] + $this->debugInfo($match));
         }
 
-        // Gagal
+        // ---- Gagal: liveness/kualitas ditolak ATAU wajah tidak cocok -> dihitung sebagai percobaan gagal ----
+        $max = (int) config('face.lockout.max_attempts');
+        $minutes = (int) config('face.lockout.minutes');
         $face->increment('failed_attempts');
 
-        if ($face->failed_attempts >= self::MAX_FACE_ATTEMPTS) {
+        if ($face->failed_attempts >= $max) {
             $face->update([
                 'failed_attempts' => 0,
-                'locked_until'    => now()->addMinutes(self::FACE_LOCK_MINUTES),
+                'locked_until'    => now()->addMinutes($minutes),
             ]);
             session()->forget('login_pending');
 
-            return $this->restart(
-                'Verifikasi wajah gagal ' . self::MAX_FACE_ATTEMPTS . ' kali. Akun dikunci ' . self::FACE_LOCK_MINUTES . ' menit.',
-                423
-            );
+            return $this->restart("Verifikasi wajah gagal {$max} kali. Akun dikunci {$minutes} menit.", 423);
         }
 
-        $left = self::MAX_FACE_ATTEMPTS - $face->failed_attempts;
+        $left = $max - $face->failed_attempts;
+        $message = $result['ok']
+            ? 'Wajah tidak cocok dengan data akun.'
+            : $result['message'];
 
         return response()->json([
-            'message' => $descriptor
-                ? "Wajah tidak cocok dengan data akun. Sisa percobaan: {$left}."
-                : "Wajah tidak terdeteksi. Sisa percobaan: {$left}.",
-        ], 422);
+            'message' => "{$message} Sisa percobaan: {$left}.",
+            'code'    => $result['ok'] ? 'mismatch' : $result['code'],
+        ] + $this->debugInfo($match), 422);
+    }
+
+    /** Jarak wajah hanya ditampilkan saat APP_DEBUG=true (untuk kalibrasi), tidak di produksi. */
+    private function debugInfo(?array $match): array
+    {
+        return config('app.debug') && $match
+            ? ['debug' => ['distance' => $match['worst'], 'scores' => $match['scores'], 'threshold' => config('face.match.threshold')]]
+            : [];
     }
 
     // ---------- Logout ----------

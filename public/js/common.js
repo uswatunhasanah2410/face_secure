@@ -154,162 +154,60 @@ const App = (() => {
     };
   }
 
-  /* ---------- Kamera + face-api.js ---------- */
-  const Face = (() => {
-    const SAMPLES = 3;
-    let stream = null;
-    let video = null;
-    let modelsLoaded = false;
-
-    // Pilih mesin hitung TensorFlow: WebGL (cepat, pakai GPU), kalau tidak tersedia pakai CPU.
-    // Tanpa ini, browser tanpa WebGL akan error "backend 'wasm' has not yet been initialized".
-    async function initBackend() {
-      const tf = faceapi.tf;
-      for (const name of ['webgl', 'cpu']) {
-        try {
-          if (await tf.setBackend(name)) {
-            await tf.ready();
-            return;
-          }
-        } catch { /* coba backend berikutnya */ }
-      }
-      throw new Error('Browser tidak mendukung pemrosesan wajah. Coba browser lain (Chrome/Edge terbaru).');
-    }
-
-    async function loadModels() {
-      if (modelsLoaded) return;
-      if (typeof faceapi === 'undefined') throw new Error('Library face-api.js tidak termuat.');
-      await initBackend();
-      const url = window.AppConfig.modelsUrl;
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(url),
-        faceapi.nets.faceLandmark68Net.loadFromUri(url),
-        faceapi.nets.faceRecognitionNet.loadFromUri(url)
-      ]);
-      modelsLoaded = true;
-    }
-
-    async function start(faceEl) {
-      await loadModels();
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 }, audio: false });
-      } catch (err) {
-        throw new Error(err.name === 'NotAllowedError'
-          ? 'Akses kamera ditolak. Izinkan kamera di pengaturan browser.'
-          : 'Kamera tidak ditemukan atau sedang dipakai aplikasi lain.');
-      }
-      video = document.createElement('video');
-      video.autoplay = true;
-      video.muted = true;
-      video.playsInline = true;
-      video.srcObject = stream;
-      faceEl.textContent = '';
-      faceEl.appendChild(video);
-      faceEl.classList.add('is-live');
-      await video.play();
-    }
-
-    function stop(faceEl) {
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      stream = null;
-      if (video) video.remove();
-      video = null;
-      if (faceEl) {
-        faceEl.classList.remove('is-live', 'is-scanning');
-        if (!faceEl.textContent) faceEl.textContent = '(Wajah)';
-      }
-    }
-
-    async function detectOnce() {
-      const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
-      const results = await faceapi.detectAllFaces(video, opts).withFaceLandmarks().withFaceDescriptors();
-
-      if (results.length === 0) throw new Error('Wajah tidak terdeteksi. Pastikan pencahayaan cukup.');
-      if (results.length > 1) throw new Error('Terdeteksi lebih dari satu wajah. Pastikan hanya Anda di kamera.');
-      if (results[0].detection.box.width < video.videoWidth * 0.2) throw new Error('Wajah terlalu jauh. Dekatkan wajah ke kamera.');
-
-      return results[0].descriptor;
-    }
-
-    function snapshot() {
-      const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = 480;
-      const size = Math.min(video.videoWidth, video.videoHeight);
-      const sx = (video.videoWidth - size) / 2;
-      const sy = (video.videoHeight - size) / 2;
-      canvas.getContext('2d').drawImage(video, sx, sy, size, size, 0, 0, 480, 480);
-      return canvas.toDataURL('image/jpeg', 0.85);
-    }
-
-    // Ambil beberapa sampel lalu dirata-rata supaya descriptor lebih stabil
-    async function capture(onProgress) {
-      const samples = [];
-      for (let i = 0; i < SAMPLES; i++) {
-        onProgress?.(i + 1, SAMPLES);
-        samples.push(await detectOnce());
-        await new Promise(r => setTimeout(r, 300));
-      }
-      const avg = new Array(128).fill(0);
-      samples.forEach(d => d.forEach((v, i) => { avg[i] += v / samples.length; }));
-      return { descriptor: avg.map(v => +v.toFixed(6)), image: snapshot() };
-    }
-
-    return { start, stop, capture, isRunning: () => !!stream };
-  })();
-
   /*
-   * Hubungkan tombol "Mulai Verifikasi" dengan kamera.
-   *   klik 1 -> nyalakan kamera
-   *   klik 2 -> pindai wajah lalu panggil submit({ descriptor, image })
+   * Hubungkan tombol "Mulai Verifikasi" dengan FaceGuard (public/js/face-guard.js):
+   *   1. minta tantangan liveness acak ke server
+   *   2. nyalakan kamera, cek wajah utuh / lurus / mata terbuka, jalankan tantangan, ambil sampel
+   *   3. kirim hasil lewat submit(payload) -> halaman yang menampilkan modal berhasil/gagal
    */
-  function bindFaceButton({ btn, faceEl, statusEl, submit }) {
+  function bindFaceButton({ btn, faceEl, statusEl, stepsEl, challengeUrl, submit, onRestart, onFail }) {
     const status = (text, type = '') => {
       statusEl.textContent = text;
       statusEl.className = 'face-status' + (type ? ' is-' + type : '');
     };
+    let running = false;
 
     btn.addEventListener('click', async () => {
-      if (!Face.isRunning()) {
-        setLoading(btn, true, 'Menyiapkan kamera...');
-        status('Memuat model pengenalan wajah...');
-        try {
-          await Face.start(faceEl);
-          setLoading(btn, false);
-          btn.textContent = 'Ambil Foto';
-          status('Posisikan wajah di tengah lingkaran, lalu klik "Ambil Foto".');
-        } catch (err) {
-          Face.stop(faceEl);
-          setLoading(btn, false);
-          status(err.message, 'error');
+      if (running) return;
+      running = true;
+      setLoading(btn, true, 'Menyiapkan kamera...');
+      if (stepsEl) stepsEl.innerHTML = '';
+      status('Memuat model pengenalan wajah...');
+
+      try {
+        const ch = await api(challengeUrl);
+        if (!ch.ok) {
+          if (ch.data.restart && onRestart) return onRestart(ch.data.message);
+          throw new Error(ch.data.message);
         }
-        return;
-      }
 
-      setLoading(btn, true, 'Memindai wajah...');
-      faceEl.classList.add('is-scanning');
-      let result;
-      try {
-        result = await Face.capture((i, n) => status(`Memindai wajah... (${i}/${n})`));
-      } catch (err) {
-        faceEl.classList.remove('is-scanning');
-        setLoading(btn, false);
-        btn.textContent = 'Ambil Foto';
-        status(err.message, 'error');
-        return;
-      }
+        await FaceGuard.start(faceEl);
+        btn.textContent = 'Verifikasi berlangsung...';
+        faceEl.classList.add('is-scanning');
 
-      status('Wajah terdeteksi. Memverifikasi...', 'ok');
-      btn.textContent = 'Memverifikasi...';
-      try {
-        await submit(result);
-      } finally {
-        Face.stop(faceEl);
-        setLoading(btn, false);
-        btn.textContent = 'Mulai Verifikasi';
+        const payload = await FaceGuard.verify({
+          challenge: ch.data,
+          samples: ch.data.samples,
+          onStatus: status,
+          stepsEl
+        });
+
+        FaceGuard.stop(faceEl);
+        status('Memeriksa data wajah di server...', 'ok');
+        await submit(payload);
         status('');
+      } catch (err) {
+        const msg = err.message || 'Verifikasi wajah gagal. Silakan ulangi.';
+        status(msg, 'error');
+        onFail?.(msg);
+      } finally {
+        FaceGuard.stop(faceEl);
+        setLoading(btn, false);
+        btn.textContent = 'Ulangi Verifikasi';
+        running = false;
       }
     });
   }
 
-  return { esc, showModal, toast, setStep, markAllDone, isEmail, setFieldError, setLoading, api, fieldError, otpInput, Face, bindFaceButton };
+  return { esc, showModal, toast, setStep, markAllDone, isEmail, setFieldError, setLoading, api, fieldError, otpInput, bindFaceButton };
 })();
